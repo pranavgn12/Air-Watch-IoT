@@ -5,6 +5,7 @@ import os
 import threading
 import time
 import random
+import socket
 from google import genai
 
 data_store = {
@@ -22,6 +23,7 @@ min_dust = max_dust = None
 # Global variable to store the latest LLM conclusion
 llm_conclusion = "Initializing AI analysis..."
 
+
 def fmt_number(v):
     if v is None:
         return "--"
@@ -30,6 +32,46 @@ def fmt_number(v):
         return str(int(n)) if n.is_integer() else f"{n:.1f}"
     except Exception:
         return "--"
+
+
+def get_local_ip():
+    """
+    Best-effort local IP detection.
+    Falls back to 127.0.0.1 if the system cannot determine an outward-facing IP.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Doesn't need to be reachable; no packets are actually sent.
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def get_asset_base(handler: BaseHTTPRequestHandler):
+    """
+    Build the base URL for assets hosted by python -m http.server on port 8000.
+
+    Priority:
+    1) Use the request Host header if present (works when opened via LAN IP/hostname)
+    2) Fall back to the machine's local IP
+    """
+    host_header = handler.headers.get("Host", "").strip()
+
+    if host_header:
+        # Strip port if present: "192.168.1.10:5000" -> "192.168.1.10"
+        # Works fine with bracketed IPv6 too: "[::1]:5000" -> "[::1]"
+        host = host_header.rsplit(":", 1)[0]
+    else:
+        host = get_local_ip()
+
+    if not host or host in ("localhost", "127.0.0.1", "0.0.0.0"):
+        host = get_local_ip()
+
+    return f"http://{host}:8000"
+
 
 def llm_worker_thread():
     """Background thread to fetch LLM updates every 5 seconds."""
@@ -42,13 +84,13 @@ def llm_worker_thread():
 
     while True:
         time.sleep(5)
-        
+
         # Grab current formatted data
         t = fmt_number(data_store['temp'])
         h = fmt_number(data_store['hum'])
         mq = fmt_number(data_store['mq135'])
         d = fmt_number(data_store['dust'])
-        
+
         # Build prompt with min/max context and a random seed
         prompt = (
             f"You are an environmental AI system analyzing raw sensor data. "
@@ -60,10 +102,10 @@ def llm_worker_thread():
             f"Be concise, engaging, and do not use markdown formatting. "
             f"Random Seed for variety: {random.randint(1, 100000)}"
         )
-        
+
         try:
             response = client.models.generate_content(
-                model="gemma-4-26b-a4b-it", 
+                model="gemma-4-26b-a4b-it",
                 contents=prompt
             )
             if response.text:
@@ -71,6 +113,7 @@ def llm_worker_thread():
                 llm_conclusion = response.text.replace('*', '').strip()
         except Exception as e:
             print(f"LLM update failed: {e}")
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -220,6 +263,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
 
+        asset_base = get_asset_base(self)
+
         html = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -228,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800;900&display=swap" rel="stylesheet">
   <title>Air Watch</title>
-   <link rel="icon" type="image/x-icon" href="http://10.28.229.167:8000/favicon.svg">
+  <link rel="icon" type="image/x-icon" href="__ASSET_BASE__/favicon.svg">
   <style>
     :root{
       --text: #043454;
@@ -553,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
       word-break: break-word;
       text-shadow: 0 1px 4px rgba(255, 255, 255, 0.9);
     }
-    
+
     /* Dedicated styling for the LLM output box to distinguish it visually */
     #llmBox {
       font-size: clamp(13px, 1.4vw, 18px);
@@ -643,7 +688,7 @@ class Handler(BaseHTTPRequestHandler):
 </head>
 <body>
 <video autoplay muted loop playsinline class="bg">
-  <source src="http://10.28.229.167:8000/bg.mp4" type="video/mp4">
+  <source src="__ASSET_BASE__/bg.mp4" type="video/mp4">
 </video>
 
   <div class="page">
@@ -882,7 +927,7 @@ class Handler(BaseHTTPRequestHandler):
             <div class="k">Last updated</div>
             <div class="v" style="font-size:14px; font-weight:800;" id="updatedAt">--</div>
           </div>
-          
+
           <div class="stat-box">
             <div class="k">AI Says</div>
             <div class="v" id="llmBox">Initializing AI...</div>
@@ -890,7 +935,7 @@ class Handler(BaseHTTPRequestHandler):
         </div>
 
         <div class="footer-note">
-          Temperature, humidity, MQ-135, and dust data are pulled from <code>/data</code> every 250 ms. 
+          Temperature, humidity, MQ-135, and dust data are pulled from <code>/data</code> every 250 ms.
         </div>
       </div>
     </div>
@@ -1050,7 +1095,7 @@ class Handler(BaseHTTPRequestHandler):
       const overallEl = document.getElementById("overallMood");
       overallEl.textContent = overall.text;
       overallEl.className = `v ${overall.cls}`;
-      
+
       // Update the LLM conclusion box
       document.getElementById("llmBox").textContent = data.llm_conclusion || "Waiting for AI...";
 
@@ -1078,6 +1123,7 @@ class Handler(BaseHTTPRequestHandler):
 </body>
 </html>
 """
+        html = html.replace("__ASSET_BASE__", asset_base)
         self.wfile.write(html.encode("utf-8"))
 
 
