@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJECT_DIR="/home/pranavgn/Desktop/Air_Watch"
-export GEMINI_API_KEY="AIzaSyDrgjtsKatSF5wME1LkMKM9hPJrrBAOC_Y"
+export GEMINI_API_KEY=""
 
 cd "$PROJECT_DIR" || exit
 
